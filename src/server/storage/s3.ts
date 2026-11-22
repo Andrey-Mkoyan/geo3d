@@ -2,17 +2,14 @@ import 'server-only';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { FileStorage } from './index';
 
-/** S3-compatible storage: AWS S3, Cloudflare R2, MinIO. The bucket must be PRIVATE. */
+/**
+ * S3-compatible storage (Neon Object Storage, AWS S3, R2, MinIO). The bucket must be PRIVATE.
+ * Connection settings come from the standard AWS_* env vars, which the SDK reads itself:
+ * AWS_ENDPOINT_URL_S3, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION.
+ */
 export class S3Storage implements FileStorage {
-  private client = new S3Client({
-    region: process.env.S3_REGION || 'auto',
-    endpoint: process.env.S3_ENDPOINT || undefined,
-    forcePathStyle: !!process.env.S3_ENDPOINT,
-    credentials: process.env.S3_ACCESS_KEY_ID
-      ? { accessKeyId: process.env.S3_ACCESS_KEY_ID, secretAccessKey: process.env.S3_SECRET_ACCESS_KEY! }
-      : undefined,
-  });
-  private bucket = process.env.S3_BUCKET!;
+  private client = new S3Client({ forcePathStyle: true });
+  private bucket = process.env.S3_BUCKET || 'assets';
 
   async put(key: string, data: Buffer, contentType: string) {
     await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: data, ContentType: contentType }));
