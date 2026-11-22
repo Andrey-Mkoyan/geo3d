@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- enums
+// Enum values intentionally match the string unions in src/types.ts.
+
+enum OrderStatus {
+  awaiting_payment
+  awaiting_review
+  confirmed
+  preparation
+  printing
+  ready
+  awaiting_courier
+  shipped
+  cancelled
+}
+
+enum PaymentStatus {
+  awaiting_quote
+  awaiting_payment
+  proof_submitted
+  verified
+  rejected
+  refunded
+}
+
+enum ProofStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  STALE
+}
+
+enum DeliveryMethod {
+  tbilisi_courier
+  regional_courier
+  self_pickup
+}
+
+enum ContactPreference {
+  EMAIL
+  SMS
+}
+
+enum Locale {
+  ka
+  en
+  ru
+}
+
+enum ItemType {
+  catalog_product
+  custom_file
+}
+
+enum StaffRole {
+  admin
+  operator_orders
+  operator_prod
+}
+
+enum PrinterStatus {
+  idle
+  printing
+  maintenance
+  offline
+}
+
+// ---------------------------------------------------------------- staff
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         StaffRole @default(operator_orders)
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+
+  events   OrderEvent[]
+  proofs   PaymentProof[]
+  auditLog AuditLog[]
+}
+
+// ---------------------------------------------------------------- catalog
+
+model Product {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  title         Json // { ka, en, ru }
+  description   Json // { ka, en, ru }
+  category      String
+  categoryRef   Category @relation(fields: [category], references: [id])
+  priceGel      Decimal  @db.Decimal(10, 2)
+  imageUrl      String // cover = images[0]
+  images        String[] @default([])
+  dimensionsMm  Json // { x, y, z }
+  weightGrams   Int
+  materials     String[]
+  colors        Json // [{ name: {ka,en,ru}, hex }]
+  leadTimeHours Int
+  inStock       Boolean  @default(true)
+  rating        Float    @default(0)
+  reviewsCount  Int      @default(0)
+  featured      Boolean  @default(false)
+  tags          String[]
+  presetModel   String?
+  modelUrl      String? // link to the model page (e.g. MakerWorld)
+  published     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  items OrderItem[]
+}
+
+model Category {
+  id        String    @id // slug, e.g. "home"
+  name      Json // { ka, en, ru }
+  sortOrder Int       @default(0)
+  active    Boolean   @default(true)
+  products  Product[]
+}
+
+model PromoCode {
+  code       String    @id
+  percentOff Int
+  active     Boolean   @default(true)
+  validUntil DateTime?
+  maxUses    Int?
+  usedCount  Int       @default(0)
+}
+
+model Setting {
+  key   String @id
+  value Json
+}
+
+// ---------------------------------------------------------------- orders
+
+model Order {
+  id                String            @id @default(cuid())
+  orderNumber       String            @unique
+  trackingTokenHash String            @unique
+  locale            Locale            @default(ka)
+
+  customerName      String
+  customerPhone     String
+  customerEmail     String
+  preferredContact  ContactPreference @default(EMAIL)
+
+  deliveryMethod    DeliveryMethod
+  city              String
+  deliveryAddress   String
+
+  subtotalGel       Decimal           @db.Decimal(10, 2)
+  deliveryGel       Decimal           @db.Decimal(10, 2)
+  discountGel       Decimal           @db.Decimal(10, 2)
+  totalGel          Decimal           @db.Decimal(10, 2)
+  promoCode         String?
+
+  status            OrderStatus       @default(awaiting_payment)
+  paymentStatus     PaymentStatus     @default(awaiting_payment)
+
+  customerNotes     String?
+  internalNotes     String?
+  estimatedCompletion DateTime?
+  assignedPrinterId String?
+  assignedPrinter   Printer?          @relation(fields: [assignedPrinterId], references: [id])
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  items  OrderItem[]
+  events OrderEvent[]
+  proofs PaymentProof[]
+
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id            String   @id @default(cuid())
+  orderId       String
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type          ItemType
+  productId     String?
+  product       Product? @relation(fields: [productId], references: [id])
+  modelRef      String?
+  title         String
+  subtitle      String
+  imageUrl      String?
+  material      String
+  colorName     String
+  colorHex      String
+  layerHeight   Float
+  infillPercent Int
+  scalePercent  Int
+  quantity      Int
+  options       Json? // { smoothVapor, brassInserts, userNotes }
+  geometry      Json?
+  unitPriceGel  Decimal  @db.Decimal(10, 2)
+  totalPriceGel Decimal  @db.Decimal(10, 2)
+  requiresReview Boolean @default(false)
+
+  @@index([orderId])
+}
+
+model OrderEvent {
+  id            String         @id @default(cuid())
+  orderId       String
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status        OrderStatus?
+  paymentStatus PaymentStatus?
+  note          String
+  actorId       String?
+  actor         AdminUser?     @relation(fields: [actorId], references: [id])
+  actorName     String?
+  createdAt     DateTime       @default(now())
+
+  @@index([orderId])
+}
+
+model PaymentProof {
+  id              String      @id @default(cuid())
+  orderId         String
+  order           Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fileKey         String
+  thumbKey        String
+  mimeType        String
+  sizeBytes       Int
+  sha256          String
+  amountClaimedGel Decimal?   @db.Decimal(10, 2)
+  payerName       String?
+  bankName        String?
+  transferDate    DateTime?
+  status          ProofStatus @default(PENDING)
+  reviewedById    String?
+  reviewedBy      AdminUser?  @relation(fields: [reviewedById], references: [id])
+  reviewedAt      DateTime?
+  rejectReason    String?
+  uploadedAt      DateTime    @default(now())
+
+  @@index([orderId])
+  @@index([sha256])
+}
+
+// ---------------------------------------------------------------- workshop
+
+model Printer {
+  id                     String        @id
+  name                   String
+  model                  String
+  technology             String
+  buildVolumeMm          Json
+  supportedMaterials     String[]
+  status                 PrinterStatus @default(idle)
+  currentOrderId         String?
+  currentProgressPercent Int?
+  timeRemainingMinutes   Int?
+  totalPrintHours        Int           @default(0)
+  lastMaintenanceDate    String
+
+  orders Order[]
+}
+
+model MaterialSpool {
+  id                String @id
+  type              String
+  brand             String
+  colorName         String
+  colorHex          String
+  diameterMm        Float
+  totalWeightGrams  Int
+  remainingGrams    Int
+  purchaseCostGel   Decimal @db.Decimal(10, 2)
+  minThresholdGrams Int
+  location          String
+}
+
+model AuditLog {
+  id         String     @id @default(cuid())
+  timestamp  DateTime   @default(now())
+  userId     String?
+  user       AdminUser? @relation(fields: [userId], references: [id])
+  userName   String
+  action     String
+  entityType String
+  entityId   String
+  details    String
+
+  @@index([timestamp])
+}
